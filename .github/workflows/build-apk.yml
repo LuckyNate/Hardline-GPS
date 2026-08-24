@@ -1,0 +1,67 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Build clean debug APK
+        run: gradle clean :app:assembleDebug --no-build-cache
+
+      - name: Name iterative APK
+        run: |
+          VERSION="0.1.${GITHUB_RUN_NUMBER}"
+          cp app/build/outputs/apk/debug/app-debug.apk "Hardline-GPS-${VERSION}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk Hardline-GPS-latest.apk
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hardline-GPS-${{ env.VERSION }}
+          path: |
+            Hardline-GPS-${{ env.VERSION }}.apk
+            Hardline-GPS-latest.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create latest release if needed
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view latest >/dev/null 2>&1; then
+            gh release create latest --title "Hardline GPS — Latest Build" --notes "Automatically updated APK from main."
+          fi
+
+      - name: Replace latest APK and upload versioned APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload latest Hardline-GPS-latest.apk --clobber
+          gh release upload latest "Hardline-GPS-${VERSION}.apk" --clobber
