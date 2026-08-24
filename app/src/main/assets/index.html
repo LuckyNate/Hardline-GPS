@@ -4,30 +4,32 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>Hardline GPS</title>
+<link href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
 <style>
 :root{font-family:system-ui,-apple-system,sans-serif;color-scheme:dark}
 *{box-sizing:border-box}
 html,body{margin:0;width:100%;height:100%;background:#090909;color:#f4f4f4;overflow:hidden}
 body{display:flex;flex-direction:column}
-header{padding:22px 18px 14px;border-bottom:1px solid #2a2a2a;background:#111}
-h1{margin:0;font-size:28px;letter-spacing:.06em} .tag{margin-top:4px;color:#999;font-size:13px}
-#mapShell{position:relative;flex:1;background:radial-gradient(circle at center,#202020 0,#101010 60%,#080808 100%);overflow:hidden}
-#hardline{position:absolute;left:50%;top:50%;width:4px;height:42%;background:#ff3535;transform-origin:50% 100%;transform:translate(-50%,-100%) rotate(0deg);border-radius:99px;box-shadow:0 0 12px rgba(255,53,53,.45)}
-#origin{position:absolute;left:50%;top:50%;width:22px;height:22px;border-radius:50%;background:#fff;border:5px solid #111;transform:translate(-50%,-50%)}
-#target{position:absolute;left:50%;top:8%;width:18px;height:18px;border-radius:50%;border:4px solid #ff3535;transform:translateX(-50%)}
-#statusCard{position:absolute;left:16px;right:16px;bottom:16px;padding:14px 16px;border-radius:14px;background:rgba(0,0,0,.76);backdrop-filter:blur(10px);border:1px solid #333}
-#status{font-weight:700;font-size:16px} #coords{margin-top:4px;color:#aaa;font-variant-numeric:tabular-nums;font-size:13px}
-.controls{display:grid;grid-template-columns:1fr auto;gap:10px;padding:12px 14px calc(12px + env(safe-area-inset-bottom));background:#111;border-top:1px solid #2a2a2a}
-button{border:1px solid #444;background:#1a1a1a;color:#fff;padding:14px 16px;border-radius:12px;font-weight:800;font-size:15px}
-button:active{transform:scale(.98)}
-#parkour.on{border-color:#38ff78;color:#38ff78}
-#parkour.on~span{}
+header{padding:22px 18px 14px;border-bottom:1px solid #2a2a2a;background:#111;z-index:5}
+h1{margin:0;font-size:28px;letter-spacing:.06em}.tag{margin-top:4px;color:#999;font-size:13px}
+#mapShell{position:relative;flex:1;overflow:hidden;background:#111}
+#map{position:absolute;inset:0}
+#loading{position:absolute;inset:0;display:grid;place-items:center;background:#111;z-index:4;font-weight:800;letter-spacing:.06em}
+#origin{position:absolute;left:50%;top:50%;width:24px;height:24px;border-radius:50%;background:#fff;border:5px solid #111;transform:translate(-50%,-50%);z-index:3;box-shadow:0 1px 8px rgba(0,0,0,.65)}
+#statusCard{position:absolute;left:16px;right:16px;bottom:16px;padding:14px 16px;border-radius:14px;background:rgba(0,0,0,.76);backdrop-filter:blur(10px);border:1px solid #333;z-index:3}
+#status{font-weight:700;font-size:16px}#coords{margin-top:4px;color:#aaa;font-variant-numeric:tabular-nums;font-size:13px}
+.controls{display:grid;grid-template-columns:1fr auto;gap:10px;padding:12px 14px calc(12px + env(safe-area-inset-bottom));background:#111;border-top:1px solid #2a2a2a;z-index:5}
+button{border:1px solid #444;background:#1a1a1a;color:#fff;padding:14px 16px;border-radius:12px;font-weight:800;font-size:15px}button:active{transform:scale(.98)}#parkour.on{border-color:#38ff78;color:#38ff78}
+.maplibregl-ctrl-bottom-left,.maplibregl-ctrl-bottom-right{z-index:2}
 </style>
 </head>
 <body>
 <header><h1>HARDLINE GPS</h1><div class="tag">There is only one route.</div></header>
 <div id="mapShell">
-  <div id="hardline"></div><div id="target"></div><div id="origin"></div>
+  <div id="map"></div>
+  <div id="loading">FINDING YOU…</div>
+  <div id="origin"></div>
   <div id="statusCard"><div id="status">Requesting location…</div><div id="coords">Waiting for GPS</div></div>
 </div>
 <div class="controls">
@@ -37,24 +39,58 @@ button:active{transform:scale(.98)}
 <script>
 const statusEl=document.getElementById('status');
 const coordsEl=document.getElementById('coords');
+const loading=document.getElementById('loading');
 const parkour=document.getElementById('parkour');
-const line=document.getElementById('hardline');
-const target=document.getElementById('target');
 let parkourOn=false;
+let map=null;
+let mapReady=false;
+let firstFix=true;
+let lastLocation=null;
+
+function ensureMap(lon,lat){
+  if(map) return;
+  map=new maplibregl.Map({
+    container:'map',
+    style:'https://tiles.openfreemap.org/styles/liberty',
+    center:[lon,lat],
+    zoom:16,
+    attributionControl:true
+  });
+  map.dragRotate.disable();
+  map.touchZoomRotate.disableRotation();
+  map.on('load',()=>{
+    mapReady=true;
+    loading.style.display='none';
+    if(lastLocation) centerOnPhone(lastLocation.lon,lastLocation.lat,true);
+  });
+}
+
+function centerOnPhone(lon,lat,instant=false){
+  if(!mapReady) return;
+  const options={center:[lon,lat],zoom:Math.max(map.getZoom(),16),essential:true};
+  if(instant) map.jumpTo(options); else map.easeTo({...options,duration:450});
+}
+
 window.Hardline={
   onStatus(message){statusEl.textContent=message},
   onLocation(lat,lon,accuracy){
+    lastLocation={lat,lon,accuracy};
     statusEl.textContent='Location locked';
     coordsEl.textContent=`${lat.toFixed(6)}, ${lon.toFixed(6)}  ±${Math.round(accuracy)} m`;
+    ensureMap(lon,lat);
+    if(mapReady){
+      centerOnPhone(lon,lat,firstFix);
+      firstFix=false;
+    }
   }
 };
+
 parkour.addEventListener('click',()=>{
   parkourOn=!parkourOn;
   parkour.classList.toggle('on',parkourOn);
-  line.style.background=parkourOn?'#38ff78':'#ff3535';
-  line.style.boxShadow=parkourOn?'0 0 12px rgba(56,255,120,.45)':'0 0 12px rgba(255,53,53,.45)';
-  target.style.borderColor=parkourOn?'#38ff78':'#ff3535';
+  document.getElementById('origin').style.background=parkourOn?'#38ff78':'#fff';
 });
+
 document.getElementById('destination').addEventListener('click',()=>{
   statusEl.textContent='Destination selection is next.';
 });
